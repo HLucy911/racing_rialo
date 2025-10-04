@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Rialo Racing</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#071226; --accent:#ff6b35; --accent2:#00d4ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,system-ui,Arial;background:linear-gradient(180deg,#071226 0%, #052037 60%);color:#fff;display:flex;align-items:center;justify-content:center;height:100vh}
+  .wrap{width:100%;max-width:1100px;padding:18px}
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  h1{margin:0;font-weight:800;letter-spacing:1px}
+  .controls{display:flex;gap:10px;align-items:center}
+  button{background:linear-gradient(90deg,var(--accent),#ff9a6b);border:0;padding:8px 14px;border-radius:10px;color:#100;cursor:pointer;font-weight:700}
+  button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.2);color:#fff}
+  .game-card{background:rgba(255,255,255,0.05);padding:12px;border-radius:14px}
+  canvas{width:100%;height:520px;display:block;border-radius:10px;background:linear-gradient(180deg,#052037 0%, #0b1723 100%)}
+  .hud{display:flex;justify-content:space-between;align-items:center;margin-top:10px}
+  .score{font-weight:800;font-size:18px;color:var(--accent2)}
+  .mobile-controls{display:none;margin-top:10px;gap:10px}
+  .big-btn{padding:14px 18px;border-radius:12px;background:linear-gradient(90deg,#00d4ff,#5ef7ff);color:#022;font-weight:800;border:0}
+  .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+  .dialog{background:#0b1b2e;padding:24px;border-radius:14px;text-align:center}
+  .dialog h2{margin:0 0 6px}
+  .muted{color:rgba(255,255,255,0.6);font-size:14px}
+  @media (max-width:720px){
+    .mobile-controls{display:flex}
+    .controls{display:none}
+    canvas{height:420px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Rialo Racing</h1>
+    <div class="controls">
+      <div class="score">Điểm: <span id="score">0</span></div>
+      <div class="muted">Tốc độ: <span id="speedVal">1.0x</span></div>
+      <button id="btnStart">Bắt đầu</button>
+      <button id="btnRestart" class="ghost">Bắt đầu lại</button>
+    </div>
+  </header>
+  <div class="game-card" style="position:relative">
+    <canvas id="game"></canvas>
+    <div id="overlay" style="display:none">
+      <div class="dialog">
+        <h2>Kết thúc</h2>
+        <div class="muted">Điểm của bạn</div>
+        <div style="font-size:36px;font-weight:900;color:var(--accent2);margin:10px 0" id="finalScore">0</div>
+        <button id="again">Chơi lại</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit(){canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight;}
+window.addEventListener('resize', fit); fit();
+
+const btnStart = document.getElementById('btnStart');
+const btnRestart = document.getElementById('btnRestart');
+const scoreEl = document.getElementById('score');
+const speedVal = document.getElementById('speedVal');
+const overlay = document.getElementById('overlay');
+const finalScore = document.getElementById('finalScore');
+const againBtn = document.getElementById('again');
+
+// Ảnh xe và chướng ngại vật
+const motoImg = new Image();
+motoImg.src = "https://lh3.googleusercontent.com/pw/AP1GczPCw3Ad5IHIrL7Bw3zSCZbRfLLK_tdla0CqonYmB8Y1HXLB2g7msbHliAc-IEIVGY8C4HY2Shbm3lBX7sqGWRftsgBdmxxa5JZ7hfz3iuNeug9KSrLyBmrMw68ZLVBXbqUrTNgonGSBCvOrgIHQM-m-=w970-h924-s-no?authuser=0"; // đổi thành link ảnh moto
+const obsImg = new Image();
+obsImg.src = "https://lh3.googleusercontent.com/pw/AP1GczMuVSiTMKHyPTRzCVdzsDg3cU73AXEbXmcbvtyEyaCTs57fapB5K9CB0VhpUfcHjajYsjw-dVCTnb-TKF9lYT0P5Upgp5LT5vaCMdRXK9ZH0IXzFL85uM_vUQqhZW1IFtveCjqsujMspna9d_NKPrrH=w970-h924-s-no?authuser=0"; // đổi thành link ảnh obstacle
+
+let smokeParticles = []; // mảng khói
+
+let G={};
+function newGame(){
+  G = {
+    running:false,time:0,score:0,
+    gameSpeed:1,baseObstacleInterval:1400*1.1, // tăng 10%
+    nextObstacleAt:0,obstacles:[],gravity:2200,
+    bike:{x:100,y:0,w:100,h:100,vy:0,onGround:true,jumps:0},
+    groundY:0,maxJumps:2,lastTick:null,boost:false
+  };
+  G.bike.y = canvas.height-120;
+  G.groundY = canvas.height-80;
+  overlay.style.display="none";
+  updateUI();
+}
+newGame();
+
+function startGame(){if(G.running) return;G.running=true;G.lastTick=performance.now();requestAnimationFrame(loop);}
+btnStart.onclick=startGame;
+btnRestart.onclick=()=>{newGame();startGame();};
+againBtn.onclick=()=>{newGame();startGame();};
+
+function updateUI(){scoreEl.textContent=Math.floor(G.score);speedVal.textContent=G.gameSpeed.toFixed(1)+"x";}
+
+function spawnObstacle(){
+  const typeRand=Math.random();
+  let obs={x:canvas.width+80,passed:false};
+  if(typeRand<0.6){ // ground
+    obs.type="ground";obs.w=40+Math.random()*60;obs.h=(40+Math.random()*50)*0.85;
+    obs.y=G.groundY-obs.h;
+  }else if(typeRand<0.85){ // tall
+    obs.type="tall";obs.w=30+Math.random()*40;obs.h=(100+Math.random()*60)*0.85;
+    obs.y=G.groundY-obs.h;
+  }else{ // flying
+    obs.type="flying";obs.w=30+Math.random()*40;obs.h=(30+Math.random()*40)*0.85;
+    obs.y=G.groundY-200-Math.random()*120;
+  }
+  obs.speed=380*G.gameSpeed;
+  G.obstacles.push(obs);
+}
+
+function jump(){
+  if(G.bike.jumps<G.maxJumps){
+    G.bike.vy = G.bike.jumps===0? -760 : -650;
+    G.bike.jumps++;
+    G.bike.onGround=false;
+
+    // tạo khói khi nhảy
+    for(let i=0;i<8;i++){
+      smokeParticles.push({
+        x: G.bike.x+G.bike.w/2,
+        y: G.bike.y+G.bike.h,
+        vx: (Math.random()-0.5)*60,
+        vy: -50-Math.random()*50,
+        alpha: 1,
+        radius: 6+Math.random()*6
+      });
+    }
+  }
+}
+
+window.addEventListener('keydown',e=>{
+  if(e.code==='Space'){jump();e.preventDefault();}
+  if(e.key.toLowerCase()==='k'){G.boost=true;}
+});
+window.addEventListener('keyup',e=>{
+  if(e.key.toLowerCase()==='k'){G.boost=false;}
+});
+
+function loop(t){
+  if(!G.running)return;
+  const dt=(t-G.lastTick)/1000;G.lastTick=t;G.time+=dt;
+
+  // bike physics
+  G.bike.vy+=G.gravity*dt;
+  G.bike.y+=G.bike.vy*dt;
+  if(G.bike.y+G.bike.h>=G.groundY){
+    G.bike.y=G.groundY-G.bike.h;G.bike.vy=0;G.bike.jumps=0;G.bike.onGround=true;
+  }
+
+  // obstacles
+  if(G.time*1000>G.nextObstacleAt){
+    spawnObstacle();
+    G.nextObstacleAt=G.time*1000+G.baseObstacleInterval/ G.gameSpeed;
+  }
+  for(let o of G.obstacles){
+    o.x-=o.speed*dt*(G.boost?1.4:1);
+    if(!o.passed && o.x+o.w<G.bike.x){G.score+=10;o.passed=true;}
+    if(o.x<G.bike.x+G.bike.w && o.x+o.w>G.bike.x && o.y<G.bike.y+G.bike.h && o.y+o.h>G.bike.y){
+      gameOver();return;
+    }
+  }
+  G.obstacles=G.obstacles.filter(o=>o.x+o.w>0);
+
+  // smoke update
+  for(let p of smokeParticles){
+    p.x += p.vx*dt;
+    p.y += p.vy*dt;
+    p.alpha -= dt*0.5;
+  }
+  smokeParticles = smokeParticles.filter(p=>p.alpha>0);
+
+  // difficulty
+  G.gameSpeed=1+G.time/30;
+  if(G.boost)G.gameSpeed+=0.5;
+  G.score+=dt*20;
+
+  updateUI();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // ground
+  ctx.fillStyle="#1a2a3a";
+  ctx.fillRect(0,G.groundY,canvas.width,canvas.height-G.groundY);
+
+  // smoke
+  for(let p of smokeParticles){
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(200,200,200,${p.alpha})`;
+    ctx.fill();
+  }
+
+  // bike
+  if(motoImg.complete){
+    ctx.drawImage(motoImg, G.bike.x, G.bike.y, G.bike.w, G.bike.h);
+  } else {
+    ctx.fillStyle="#ff6b35";
+    ctx.fillRect(G.bike.x,G.bike.y,G.bike.w,G.bike.h);
+  }
+
+  // obstacles
+  for(let o of G.obstacles){
+    if(obsImg.complete){
+      ctx.drawImage(obsImg, o.x, o.y, o.w, o.h);
+    } else {
+      ctx.fillStyle="#00d4ff";
+      ctx.fillRect(o.x,o.y,o.w,o.h);
+    }
+  }
+}
+
+function gameOver(){
+  G.running=false;
+  finalScore.textContent=Math.floor(G.score);
+  overlay.style.display="flex";
+}
+</script>
+</body>
+</html>
